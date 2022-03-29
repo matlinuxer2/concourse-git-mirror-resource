@@ -1,92 +1,106 @@
 # concourse-git-mirror-resource
 
+Mirror the branches between git repositories.
 
 
-## Getting started
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Features
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+- Multiple repositories pull sources
+- Multiple repositories push destinations
+- Branch name filter with include and exclude regexp patterns
+- Support prefix and postfix branch name renaming
 
-## Add your files
+## Source Configuration
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+Sample configuration:
 
+```yaml
+  source:
+    private_key: |
+      -----BEGIN RSA PRIVATE KEY-----
+      MIIEowIBAAKCAQEAtCS10/f7W7lkQaSgD/mVeaSOvSF9ql4hf/zfMwfVGgHWjj+W
+      <Lots more text>
+      DWiJL+OFeg9kawcUL6hQ8JeXPhlImG6RTUffma9+iGQyyBMCGd1l
+      -----END RSA PRIVATE KEY-----
+    pull:
+      - uri: https://some_git_hosting/abc.git
+        include:
+          - "^master$"
+          - "^testing$"
+          - "^features-.*$"
+        rename:
+          method: copy
+      - uri: https://some_git_hosting/xyz.git
+        include:
+          - "^testing$"
+          - "^feature-.*$"
+        exclude:
+          - "^master$"
+        rename:
+          method: copy
+        collision: "overwrite"
+      - uri: https://some_git_hosting/pqr.git
+        include:
+          - "^testing$"
+          - "^feature-.*$"
+        rename:
+          method: prefix
+          arg: "pqr-staging/"
+        collision: "skip"
+    push:
+      - uri: ssh://git@git_hosting_for_developer/source.git
+        force: true
+        prune: "deleted"
+      - uri: ssh://git@git_hosting_for_autobuild/source.git
+        force: true
+        prune: "all"
+      - uri: ssh://git@git_hosting_for_backup/source.git
+        force: true
+        prune: "none"
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/matlinuxer2/concourse-git-mirror-resource.git
-git branch -M main
-git push -uf origin main
-```
 
-## Integrate with your tools
 
-- [ ] [Set up project integrations](https://gitlab.com/matlinuxer2/concourse-git-mirror-resource/-/settings/integrations)
 
-## Collaborate with your team
+- `private_key`: *Optional.* Private key to use when pulling/pushing.
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+- `pull`: List of repositories's configurations for pulling
+  - `pull[].uri`: The URI of repository to mirror from
+  - `pull[].include` : List of regexp patterns to include branches. Use the syntax of ``grep -e``.
+  - `pull[].exclude` : List of regexp patterns to exclude branches. Use the syntax of ``grep -e``
+  - `pull[].rename.method`: Choose how to transform branches' name.
+    - ``copy``: Just copy the branches' name without any modification.
+    - ``prefix``: Add a string in the beginning of the original branch name.
+    - ``postfix``: Append a string in the end of the origininal branch name.
+  - `pull[].rename.arg`: The argument used for `pull[].rename.method`
+  - `pull[].collision`: Choose how to do when branches' name conflict
+    - ``skip``: Don't overwrite previously created branches of the same name.
+    - ``overwrite``: Overwrite previously created branches of the same name.
 
-## Test and Deploy
+- `push`: List of repositories's configurations for pushing
+  - `push[].uri`
+  - `push[].force`
+  - `push[].prune`
+    - ``none``: Don't delete any remote branches.
+    - ``delete``: Only delete remote branches which was mirror-pushed and currently deleted.
+    - ``all``: Delete all orphan branches which having no corresponding local branches.
 
-Use the built-in continuous integration in GitLab.
+## Behavior
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
 
-***
+### `check`: Check and mirror branches
 
-# Editing this README
+WARNING: This is NOT READ-ONLY resource in `check` state. I strongly recommend to have a backup or test with an experimental repository before deploying to real targets.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!).  Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+This resource will fetch the whole repository but only calculate the target branches based on include and exclude filters and branches renaming afterward.
+When target branches status change -- added, deleted, or having new commits -- , the status calculation changes and generate a new version.
+The version number itself just a simply hash value, not any git revision or so.
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
 
-## Name
-Choose a self-explaining name for your project.
+Unlike most other concourse resources keep read-only in `check` action, this one will do `git push` operations while `check` action.
+The major reason is to utilize the concourse resource's cache mechanism without fetching git repositories repeatly for just a small commit.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+### `in`: Do nothing
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+### `out`: Not supported.
